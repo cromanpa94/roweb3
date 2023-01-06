@@ -1,0 +1,286 @@
+---
+title: Phylogenetics with `phruta`
+author:
+  - R package build
+date: '2023-01-06'
+slug: phylogenetics-with-phruta
+categories: []
+tags:
+  - biology
+  - biodiversity
+  - bioinformatics
+  - genbank
+  - phylogeny
+package_version: 0.1.3
+description: Using `phruta` to reconstruct the phylogeny of the new world Quail
+twitterImg: blog/2019/06/04/post-template/name-of-image.png
+twitterAlt: Alternative description of the image
+tweet: A post about phylogenetics and `phruta` by @cromanpa!
+---
+
+
+
+
+```{r setup, include=FALSE}
+library(knitr)
+library(kableExtra)
+library(benchmarkme)
+library(ggtree)
+knitr::opts_chunk$set(cache = TRUE,
+                      message = FALSE, 
+                      warning = FALSE,
+                      fig.path = 'figs/',
+                      cache.path = '_cache/',
+                      fig.process = function(x) {
+                      x2 = sub('-\\d+([.][a-z]+)$', '\\1', x)
+                      if (file.rename(x, x2)) x2 else x
+                      },
+                      tidy.opts = list(width.cutoff = 60), tidy = TRUE)
+```
+
+The `phruta` package is primarily designed to simplify the basic phylogenetic computational workflow in `R`. `phruta` is expected to allow scientists to assemble molecular databases or phylogenies for particular taxonomic groups, with minimal complexity and maximal reproducibility. All the code in `phruta` runs within `R`. Below, we will use `phruta` to assemble a phylogeny for the new world Quails. Species in this group are classified in the family Odontophoridae, a clade including nearly 34 extant species classified in 10 genera. Let's start by loading `phruta`:
+
+
+```{r}
+library(phruta)
+```
+
+```{r setup2, eval = TRUE, echo=FALSE, include = FALSE}
+assign(".testMode", TRUE, envir = phruta:::pkg.env)
+start_time <- Sys.time()
+```
+
+So far, we have decided the taxonomic makeup of our analyses. We will now use `phruta` to figure out what genes are well sampled in GenBank for both the ingroup and outgroup:
+
+```{r results = 'hide'}
+gs.seqs <- gene.sampling.retrieve(organism = c("Odontophoridae", 
+                                               "Ptilopachus",
+                                               "Polyplectron"), 
+                                  speciesSampling = TRUE,
+                                  npar = 6,
+                                  nSearchesBatch = 500
+)
+```
+
+For the search terms, `phruta` was able to retrieve the names for `r nrow(gs.seqs)` gene regions from GenBank. We will now generate a preliminary summary of the accession numbers retrieved for the combination of target taxa and gene regions. For simplicity, we will focus on analyzing gene regions that are sampled in \>20% of the species (`targetGenes` data.frame) (\ref(tab:topGenes). 
+
+```{r topGenes, echo=FALSE}
+head(gs.seqs)
+```
+
+The `acc.table` object created below is a `data.frame` object that will later be used to download the relevant gene sequences from GenBank (\ref(tab:AccN)). 
+
+
+```{r  results = 'hide'}
+targetGenes <- gs.seqs[gs.seqs$PercentOfSampledSpecies > 20,]
+acc.table <- acc.table.retrieve(
+            clades  = c("Odontophoridae", "Ptilopachus", "Polyplectron"),
+            genes = targetGenes$Gene,
+            speciesLevel = TRUE,
+            npar = 6,
+            nSearchesBatch = 500
+          )
+```
+
+
+```{r AccN, echo=FALSE}
+row.names(acc.table) <- NULL
+head(acc.table[,-2])
+```
+
+
+Since we have only assembled a sampling matrix, we still need to retrieve all the sequences from the accessions table generated using `acc.table`:
+
+```{r results = 'hide'}
+sqs.downloaded <- sq.retrieve.indirect(acc.table = acc.table, 
+                                       download.sqs = FALSE)
+```
+
+Now, let's make sure that we are only including sequences that are reliable and from species that we are actually interested in analyzing. 
+
+
+```{r results = 'hide'}
+sqs.curated <- sq.curate(filterTaxonomicCriteria = '[AZ]',
+                         kingdom = 'animals', 
+                         sqs.object = sqs.downloaded,
+                         removeOutliers = FALSE)
+```
+
+Running the `sq.curate()` function will create an object of class `list` (i.e. `sqs.curated`) that includes (1) the curated sequences with original names, (2) the curated sequences with species-level names (`renamed_*` prefix), (3) the accession numbers table (`AccessionTable`; \ref(tab:tw)), and (4) a summary of taxonomic information for all the species sampled in the files (\ref(tab:tw2), \ref(tab:tw3)). 
+
+
+```{r tw, echo = FALSE}
+head(sqs.curated$AccessionTable[,-5])
+```
+
+
+```{r tw2, echo = FALSE}
+head(sqs.curated$Taxonomy[,c(1:7)])
+```
+
+
+```{r tw3, echo = FALSE}
+head(sqs.curated$Taxonomy.Sampling[,c(1:7)])
+```
+
+From here, we will align the sequences that we just curated using `sq.aln()` with default parameters:
+
+```{r results = 'hide'}
+sqs.aln <- sq.aln(sqs.object = sqs.curated)
+```
+
+The raw and masked alignments are presented in \ref(fig:alnraw) and \ref(fig:alncur), respectively.
+
+```{r echo = FALSE}
+library(ape)
+pdf("figs/UF.Raw.pdf", width = 8, height = 8)
+par(mfrow = c(ceiling(length(sqs.aln)/2),2))
+for (i in seq_along(sqs.aln)) {
+  if (!is.null(sqs.aln[[i]]$Aln.Original)) {
+  image(sqs.aln[[i]]$Aln.Original,
+        main = names(sqs.aln)[i], 
+        show.labels = FALSE, 
+        xlab = "Position",
+        ylab = "Species", 
+        legend = FALSE)
+  }
+}
+sv <- dev.off()
+```
+
+```{r alnraw, include=TRUE, fig.cap=c("Raw alignments for gene regions sampled in more than 20% of the species in GenBank"), echo=FALSE}
+knitr::include_graphics("./figs/UF.Raw.pdf")
+```
+
+
+
+```{r echo = FALSE}
+pdf("figs/UF.Cur.pdf", width = 8, height = 8)
+par(mfrow = c(ceiling(length(sqs.aln)/2),2))
+for (i in seq_along(sqs.aln)) {
+  if (!is.null(sqs.aln[[i]]$Aln.Masked)) {
+  image(sqs.aln[[i]]$Aln.Masked, 
+        main = names(sqs.aln)[i], 
+        show.labels = FALSE, 
+        xlab = "Position",
+        ylab = "Species", legend = FALSE
+        )
+  }
+}
+sv <- dev.off()
+```
+
+
+
+```{r alncur, include=TRUE, fig.cap=c("Curated alignments for gene regions sampled in more than 20% of the species in GenBank"), echo=FALSE}
+knitr::include_graphics("./figs/UF.Cur.pdf")
+```
+
+Phylogenetic inference in `phruta` is conducted using the `tree.raxml()` function. To use this function, we will have to export our sequence alignments locally. We will follow the same folder structure as if we were exporting everything locally. Specifically, our sequence alignments will located in `2.Alignments` and we will exclusively export the alignments that were masked:
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+dir.create("2.Alignments")
+lapply(seq_along(sqs.aln), function(x){
+  ape::write.FASTA(sqs.aln[[x]]$Aln.Masked, 
+                   file = paste0(
+                     "2.Alignments/Masked_", names(sqs.aln)[x], ".fasta"
+                     )
+                   )
+})
+```
+
+We are now ready to run RAxML from `phruta`:
+
+
+```{r message=FALSE, warning=FALSE}
+outgroup <- sqs.curated$Taxonomy[sqs.curated$Taxonomy$genus == 'Polyplectron',]
+
+tree.raxml(folder = '2.Alignments', 
+           FilePatterns = 'Masked_', 
+           raxml_exec = 'raxmlHPC', 
+           Bootstrap = 100,
+           outgroup = paste(outgroup$species_names, collapse = ",")
+           )
+```
+
+The resulting phylogeny from these analyses is presented in \ref(fig:raxmlphylo).
+
+```{r raxmlplot, message=FALSE, warning=FALSE, include = FALSE}
+library(phytools)
+raxmlTree <- read.tree("3.Phylogeny/RAxML_bipartitions.phruta")
+raxmlTree$root.edge <- 0.01
+raxmlTree <- rootedge.to.singleton(raxmlTree)
+
+pdf("figs/raxml_ingroup.pdf", width = 8, height = 8)
+plotTree(ladderize(raxmlTree, right = FALSE))
+nodelabels(text = raxmlTree$node.label,
+           node = 1:raxmlTree$Nnode + Ntip(raxmlTree),
+           frame = "none", 
+           adj = c(1.1, -0.4)
+           )
+dev.off()
+```
+
+
+```{r raxmlphylo, include=TRUE, fig.cap=c("RAxML phylo"), echo=FALSE}
+knitr::include_graphics("./figs/raxml_ingroup.pdf")
+```
+
+Finally, let's perform tree dating in our phylogeny using secondary calibrations extracted from [Scholl and Wiens (2016)](https://royalsocietypublishing.org/doi/pdf/10.1098/rspb.2016.1334). I am only using this study because it has a large phylogeny but I expect to replace it in the near future:
+
+```{r message=FALSE, warning=FALSE}
+dir.create("1.CuratedSequences")
+write.csv(sqs.curated$Taxonomy, '1.CuratedSequences/1.Taxonomy.csv')
+
+tree.dating(taxonomyFolder = "1.CuratedSequences", 
+            phylogenyFolder = "3.Phylogeny", 
+            scale = 'treePL')
+```
+
+The resulting time-calibrated tree is presented in \ref(fig:timecaltree).
+
+```{r timetree, include=FALSE}
+library(strap)
+calTree <- read.tree("4.Timetree/family-levelCalibration.tre")
+calTree$root.edge <- 1
+calTree2 <- calTree
+calTree2$root.time <- max(nodeHeights(calTree2))
+
+#Need to adjust margins
+pdf("figs/phylo_ingroup.pdf", width = 8, height = 8)
+geoscalePhylo(tree = ladderize(calTree2,right = FALSE), 
+              units = c("Epoch", "Age"), 
+              boxes = "Epoch",   
+              cex.tip = 0.7, 
+              cex.age = 0.7, 
+              cex.ts = 0.7, 
+              label.offset = 0, 
+              x.lim = c(-15, max(nodeHeights(calTree2))), 
+              lwd = 3, 
+              width = 2, 
+              quat.rm = TRUE, 
+              root.edge = TRUE)
+dev.off()
+```
+
+```{r timecaltree, include=TRUE, fig.cap=c("Time-calibrated phylogeny phylo"), echo=FALSE}
+knitr::include_graphics("./figs/phylo_ingroup.pdf")
+```
+
+```{r include=FALSE}
+unlink(c("0.Sequences", 
+         "1.CuratedSequences", 
+         "2.Alignments", 
+         "2.1.PartitionFinderv1",
+         "3.Phylogeny", 
+         "3.1.RogueTaxa",
+         "3.2.Phylogeny.constraint",
+         "4.Timetree",
+         "_cache"), 
+       recursive = TRUE)
+```
+
+
+
+
