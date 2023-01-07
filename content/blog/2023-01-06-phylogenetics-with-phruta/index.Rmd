@@ -1,14 +1,19 @@
 ---
-title: Phylogenetics with `phruta`
-author: Cristian Román-Palacios
+title: Phylogenetics With `phruta`
+author: Cristian Román Palacios
 date: '2023-01-06'
 slug: phylogenetics-with-phruta
 tags:
+  - Software Peer Review
+  - packages
   - biology
   - biodiversity
   - bioinformatics
   - genbank
   - phylogeny
+  - pipelines
+  - workflow-automation
+  - workflows
 package_version: 0.1.3
 description: Using `phruta` to reconstruct the phylogeny of the new world Quail
 ---
@@ -18,6 +23,7 @@ description: Using `phruta` to reconstruct the phylogeny of the new world Quail
 library(knitr)
 library(kableExtra)
 library(ggtree)
+library(DT)
 knitr::opts_chunk$set(cache = TRUE,
                       message = FALSE, 
                       warning = FALSE,
@@ -28,6 +34,48 @@ knitr::opts_chunk$set(cache = TRUE,
                       if (file.rename(x, x2)) x2 else x
                       },
                       tidy.opts = list(width.cutoff = 60), tidy = TRUE)
+
+# Options to have images saved in the post folder
+# And to disable symbols before output
+knitr::opts_chunk$set(fig.path = "", comment = "")
+
+# knitr hook to make images output use Hugo options
+knitr::knit_hooks$set(
+  plot = function(x, options) {
+    hugoopts <- options$hugoopts
+    paste0(
+      "{{<figure src=",
+      '"', x, '" ',
+      if (!is.null(hugoopts)) {
+        glue::glue_collapse(
+          glue::glue('{names(hugoopts)}="{hugoopts}"'),
+          sep = " "
+        )
+      },
+      ">}}\n"
+    )
+  }
+)
+
+# knitr hook to use Hugo highlighting options
+knitr::knit_hooks$set(
+  source = function(x, options) {
+  hlopts <- options$hlopts
+    paste0(
+      "```r ",
+      if (!is.null(hlopts)) {
+      paste0("{",
+        glue::glue_collapse(
+          glue::glue('{names(hlopts)}={hlopts}'),
+          sep = ","
+        ), "}"
+        )
+      },
+      "\n", glue::glue_collapse(x, sep = "\n"), "\n```\n"
+    )
+  }
+)
+
 ```
 
 <small><em>This post discusses the phylogenetic workflow implemented in the newly released `phruta` `R` package. 
@@ -50,6 +98,7 @@ library(phruta)
 
 ```{r setup2, eval = TRUE, echo=FALSE, include = FALSE}
 assign(".testMode", TRUE, envir = phruta:::pkg.env)
+options(kableExtra.html.bsTable = TRUE)
 ```
 
 So far, we have decided the taxonomic makeup of our analyses. We will now use `phruta` to figure out what genes are well sampled in GenBank for both the ingroup and outgroup:
@@ -57,40 +106,39 @@ So far, we have decided the taxonomic makeup of our analyses. We will now use `p
 ```{r results = 'hide'}
 gs.seqs <- gene.sampling.retrieve(organism = c("Odontophoridae", 
                                                "Ptilopachus",
-                                               "Polyplectron"), 
-                                  speciesSampling = TRUE,
-                                  npar = 6,
+                                               "Polyplectron"),
+                                  npar = 6, 
                                   nSearchesBatch = 500
                                   )
 ```
 
-For the search terms, `phruta` was able to retrieve the names for `r nrow(gs.seqs)` gene regions from GenBank. We will now generate a preliminary summary of the accession numbers retrieved for the combination of target taxa and gene regions. For simplicity, we will focus on analyzing gene regions that are sampled in \>20% of the species (`targetGenes` data.frame): 
+For the search terms, `phruta` was able to retrieve the names for `r nrow(gs.seqs)` gene regions from GenBank. We will now generate a preliminary summary of the accession numbers retrieved for the combination of target taxa and gene regions. For simplicity, we will focus on analyzing the top 6 gene regions: 
 
 ```{r topGenes, echo=FALSE}
-head(gs.seqs)
+kable(gs.seqs) %>%
+    kable_styling(bootstrap_options = c('striped', 'condensed')) %>%
+    scroll_box(width = "700px", height = "500px")
 ```
 
 Next, we will create a new object, `acc.table`, that will later be used to download the relevant gene sequences from GenBank. 
 
 ```{r  results = 'hide'}
-targetGenes <- gs.seqs[gs.seqs$PercentOfSampledSpecies > 20,]
 acc.table <- acc.table.retrieve(
             clades  = c("Odontophoridae", "Ptilopachus", "Polyplectron"),
-            genes = targetGenes$Gene,
+            genes = head(gs.seqs)$Gene,
             speciesLevel = TRUE,
-            npar = 6,
+            npar = 6, 
             nSearchesBatch = 500
-          )
+            )
 ```
 
 So far, we have only assembled a sampling matrix. Let's now download all the sequences listed in the accessions table generated above:
 
 ```{r results = 'hide'}
-sqs.downloaded <- sq.retrieve.indirect(acc.table = acc.table, download.sqs = FALSE)
+sqs.downloaded <- sq.retrieve.indirect(acc.table = acc.table)
 ```
 
 Now, let's make sure that we are only including sequences that are reliable and from species that we are actually interested in analyzing. 
-
 
 ```{r results = 'hide'}
 sqs.curated <- sq.curate(filterTaxonomicCriteria = '[AZ]',
@@ -102,7 +150,9 @@ sqs.curated <- sq.curate(filterTaxonomicCriteria = '[AZ]',
 Running the `sq.curate()` function will create an object of class `list` (i.e. `sqs.curated`) that includes (1) the curated sequences with original names, (2) the curated sequences with species-level names (`renamed_*` prefix), (3) the accession numbers table (`AccessionTable`), and (4) a summary of taxonomic information for all the species sampled in the files. 
 
 ```{r tw, echo = FALSE}
-head(sqs.curated$AccessionTable[,-5])
+kable(sqs.curated$AccessionTable[,-5]) %>%
+    kable_styling(bootstrap_options = c('striped', 'condensed')) %>%
+    scroll_box(width = "700px", height = "500px")
 ```
 
 From here, we will align the sequences that we just curated using `sq.aln()` with default parameters:
@@ -129,7 +179,9 @@ for (i in seq_along(sqs.aln)) {
 sv <- dev.off()
 ```
 
+<!--html_preserve-->
 {{< figure src = "UF.Cur.png" alt = "Sequence alignment" class = "center" >}}
+<!--/html_preserve-->
 
 Phylogenetic inference in `phruta` is conducted using the `tree.raxml()` function. To use this function, we will have to export our sequence alignments locally. We will follow the same folder structure as if we were exporting everything locally. Specifically, our sequence alignments will located in `2.Alignments` and we will exclusively export the alignments that were masked:
 
@@ -176,11 +228,11 @@ nodelabels(text = raxmlTree$node.label,
            )
 dev.off()
 ```
-
+<!--html_preserve-->
 {{< figure src = "raxml_ingroup.png" alt = "RAxML tree" class = "center" >}}
+<!--/html_preserve-->
 
-
-Finally, let's perform tree dating in our phylogeny using secondary calibrations extracted from [Scholl and Wiens (2016)](https://royalsocietypublishing.org/doi/pdf/10.1098/rspb.2016.1334). I am only using this study because it has a large phylogeny but I expect to replace it in the near future:
+Finally, let's perform tree dating in our phylogeny using secondary calibrations extracted from a large time-calibrated phylogeny with overlapping nodes:
 
 ```{r message=FALSE, warning=FALSE}
 dir.create("1.CuratedSequences")
@@ -218,19 +270,20 @@ geoscalePhylo(tree = ladderize(calTree2,right = FALSE),
 dev.off()
 ```
 
-
-{{< figure src = "phylo_ingroup.png" alt = "Timetree" class = "center" >}}
+<!--html_preserve-->
+{{< figure src = "phylo_ingroup.png" alt = "Timetree for the selected taxa" class = "center" >}}
+<!--/html_preserve-->
 
 This is the end of this brief tutorial! Hope that you've found this tutorial to be informative and useful. Please [get in touch](https://cromanpa94.github.io/cromanpa/) if you find any issues, would like to help me improve this tool, would like to see any additional feature, etc. 
 
 ## A `shiny` app for `phruta`!!
 
-You can also use the same functions implemented in `phruta` in a graphical environment. Please visit the repo for `salphycon`, the associated `shiny` app, and enjoy a simplified version of `phruta`. You can find the repo [here](https://github.com/cromanpa94/salphycon).
+You can also use the same functions implemented in `phruta` in a graphical environment. Please visit the repo for `salphycon`, the associated `shiny` app, and enjoy a simplified version of `phruta`. You can find the [repo here](https://github.com/cromanpa94/salphycon).
 
 
 ## Acknowledgements
 
-Anna Krystalli(https://github.com/annakrystalli), [Rayna Harris](https://github.com/raynamharris), and [Frederick Boehm](https://github.com/fboehm) provided excellent comments during the peer review process of `phruta` in [ROpenSci](https://github.com/ropensci/software-review/issues/458). The author thanks [Heidi E. Steiner](https://heidiesteiner.netlify.app/) for proofreading the vignettes and documentation in `phruta` in addition to early versions of this manuscript.
+[Anna Krystalli](https://github.com/annakrystalli), [Rayna Harris](https://github.com/raynamharris), and [Frederick Boehm](https://github.com/fboehm) provided excellent comments during the peer review process of `phruta` in [ROpenSci](https://github.com/ropensci/software-review/issues/458). The author thanks [Heidi E. Steiner](https://heidiesteiner.netlify.app/) for proofreading the documentation in `phruta`.
 
 ```{r include=FALSE}
 unlink(c("0.Sequences", 
